@@ -5,7 +5,19 @@ const app = express();
 
 // Middleware
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: function(origin, callback) {
+    // Remove trailing slash if present and compare
+    const allowed = [
+      'https://vibe-mart-topaz.vercel.app',
+      'http://localhost:3000',
+    ];
+    const cleanOrigin = origin ? origin.replace(/\/$/, '') : '';
+    if (!origin || allowed.includes(cleanOrigin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true
 }));
 app.use(express.json());
