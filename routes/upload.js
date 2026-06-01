@@ -3,7 +3,6 @@ const cloudinary = require('cloudinary').v2;
 const multer = require('multer');
 const auth = require('../middleware/auth');
 
-// Configure Cloudinary
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -19,18 +18,11 @@ const upload = multer({
   },
 });
 
-// Upload single file to Cloudinary
-function uploadToCloudinary(buffer) {
+function uploadToCloudinary(buffer, folder = 'shoplk/products') {
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
-      {
-        folder: 'shoplk/products',
-        transformation: [{ width: 800, height: 800, crop: 'limit', quality: 'auto', fetch_format: 'auto' }],
-      },
-      (error, result) => {
-        if (error) reject(error);
-        else resolve(result.secure_url);
-      }
+      { folder, transformation: [{ width: 800, height: 800, crop: 'limit', quality: 'auto', fetch_format: 'auto' }] },
+      (error, result) => { if (error) reject(error); else resolve(result.secure_url); }
     );
     stream.end(buffer);
   });
@@ -38,20 +30,12 @@ function uploadToCloudinary(buffer) {
 
 // POST /api/upload/images — multiple images
 router.post('/images', auth, upload.array('images', 10), async (req, res) => {
-  if (!req.files || req.files.length === 0) {
-    return res.status(400).json({ error: 'No images provided' });
-  }
-
-  // Check Cloudinary config
-  if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
-    return res.status(500).json({ error: 'Cloudinary not configured — add CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET to Railway Variables' });
-  }
-
+  if (!req.files?.length) return res.status(400).json({ error: 'No images provided' });
+  if (!process.env.CLOUDINARY_CLOUD_NAME) return res.status(500).json({ error: 'Cloudinary not configured' });
   try {
     const urls = await Promise.all(req.files.map(f => uploadToCloudinary(f.buffer)));
     res.json({ urls });
   } catch (err) {
-    console.error('Cloudinary error:', err);
     res.status(500).json({ error: 'Upload failed: ' + err.message });
   }
 });
