@@ -64,14 +64,14 @@ router.get('/admin/all', auth, async (req, res) => {
 
 // POST /api/products - create product
 router.post('/', auth, async (req, res) => {
-  const { category_id, name, description, price, compare_price, cost_price, sku, images, variants } = req.body;
+  const { category_id, name, description, price, compare_price, sku, images, variants } = req.body;
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Date.now();
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
     const [result] = await conn.query(
-      'INSERT INTO products (category_id, name, slug, description, price, compare_price, cost_price, sku, images) VALUES (?,?,?,?,?,?,?,?,?)',
-      [category_id, name, slug, description, price, compare_price || null, cost_price || null, sku, JSON.stringify(images || [])]
+      'INSERT INTO products (category_id, name, slug, description, price, compare_price, sku, images) VALUES (?,?,?,?,?,?,?,?)',
+      [category_id, name, slug, description, price, compare_price || null, sku, JSON.stringify(images || [])]
     );
     const productId = result.insertId;
     if (variants && variants.length) {
@@ -94,11 +94,11 @@ router.post('/', auth, async (req, res) => {
 
 // PUT /api/products/:id - update product
 router.put('/:id', auth, async (req, res) => {
-  const { category_id, name, description, price, compare_price, cost_price, sku, images, is_active } = req.body;
+  const { category_id, name, description, price, compare_price, sku, images, is_active } = req.body;
   try {
     await db.query(
-      'UPDATE products SET category_id=?, name=?, description=?, price=?, compare_price=?, cost_price=?, sku=?, images=?, is_active=? WHERE id=?',
-      [category_id, name, description, price, compare_price || null, cost_price || null, sku, JSON.stringify(images || []), is_active ?? 1, req.params.id]
+      'UPDATE products SET category_id=?, name=?, description=?, price=?, compare_price=?, sku=?, images=?, is_active=? WHERE id=?',
+      [category_id, name, description, price, compare_price || null, sku, JSON.stringify(images || []), is_active ?? 1, req.params.id]
     );
     res.json({ message: 'Product updated' });
   } catch (err) { res.status(500).json({ error: err.message }); }
