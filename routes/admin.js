@@ -4,68 +4,49 @@ const auth = require('../middleware/auth');
 
 // GET /api/admin/dashboard
 router.get('/dashboard', auth, async (req, res) => {
+  const isSuperAdmin = req.admin.role === 'super_admin';
   try {
-    // Revenue from non-cancelled orders
-    const [[{ revenue }]] = await db.query("SELECT COALESCE(SUM(total),0) as revenue FROM orders WHERE status != 'cancelled'");
+    const [[{ revenue }]] = await db.query(
+      "SELECT COALESCE(SUM(total),0) as revenue FROM bills WHERE MONTH(created_at)=MONTH(NOW()) AND YEAR(created_at)=YEAR(NOW())"
+    );
     const [[{ orders }]] = await db.query('SELECT COUNT(*) as orders FROM orders');
-    const [[{ pending }]] = await db.query("SELECT COUNT(*) as pending FROM orders WHERE status = 'pending'");
+    const [[{ pending }]] = await db.query("SELECT COUNT(*) as pending FROM orders WHERE status='pending'");
     const [[{ customers }]] = await db.query('SELECT COUNT(*) as customers FROM customers');
-    const [[{ products }]] = await db.query('SELECT COUNT(*) as products FROM products WHERE is_active = 1');
-
-    // Revenue by status breakdown
-    const [statusBreakdown] = await db.query(`
-      SELECT status, COUNT(*) as count, COALESCE(SUM(total), 0) as revenue
-      FROM orders GROUP BY status ORDER BY FIELD(status, 'delivered', 'shipped', 'processing', 'confirmed', 'pending', 'cancelled')
-    `);
-
-    // Top products with cost for profit calculation
-    const [topProducts] = await db.query(`
-      SELECT p.name, p.cost_price, SUM(oi.quantity) as units_sold, SUM(oi.total_price) as revenue,
-             COALESCE(SUM(oi.quantity * p.cost_price), 0) as total_cost
-      FROM order_items oi
-      JOIN products p ON oi.product_id = p.id
-      JOIN orders o ON oi.order_id = o.id
-      WHERE o.status != 'cancelled'
-      GROUP BY p.id ORDER BY units_sold DESC LIMIT 5
-    `);
-
-    // Recent orders
+    const [[{ products }]] = await db.query('SELECT COUNT(*) as products FROM products WHERE is_active=1');
     const [recentOrders] = await db.query('SELECT * FROM orders ORDER BY created_at DESC LIMIT 8');
-
-    // Today's sales
-    const [[todaySales]] = await db.query(`
-      SELECT COALESCE(SUM(total),0) as revenue, COUNT(*) as count
-      FROM orders WHERE DATE(created_at) = CURDATE() AND status != 'cancelled'
-    `);
-
-    // This month's sales
-    const [[monthSales]] = await db.query(`
-      SELECT COALESCE(SUM(total),0) as revenue, COUNT(*) as count
-      FROM orders WHERE MONTH(created_at) = MONTH(NOW()) AND YEAR(created_at) = YEAR(NOW()) AND status != 'cancelled'
-    `);
-
-    // Low stock alert
     const [lowStock] = await db.query(`
       SELECT p.name, pv.colour, pv.size, pv.stock_qty
-      FROM product_variants pv
-      JOIN products p ON pv.product_id = p.id
-      WHERE pv.stock_qty <= 5 AND p.is_active = 1
-      ORDER BY pv.stock_qty ASC LIMIT 10
+      FROM product_variants pv JOIN products p ON pv.product_id=p.id
+      WHERE pv.stock_qty <= 5 AND p.is_active=1 ORDER BY pv.stock_qty ASC LIMIT 10
     `);
 
-    res.json({
-      revenue,
-      orders,
-      pending,
-      customers,
-      products,
-      statusBreakdown,
+    // Top products — hide cost/profit from non-super-admins
+    const [topProducts] = await db.query(`
+      SELECT bi.product_name as name, SUM(bi.quantity) as units_sold,
+             SUM(bi.total_price) as revenue
+             ${isSuperAdmin ? ', SUM(bi.cost_price * bi.quantity) as total_cost' : ''}
+      FROM bill_items bi JOIN bills b ON bi.bill_id=b.id
+      WHERE MONTH(b.created_at)=MONTH(NOW()) AND YEAR(b.created_at)=YEAR(NOW())
+      GROUP BY bi.product_name ORDER BY units_sold DESC LIMIT 5
+    `);
+
+    const response = {
+      revenue: isSuperAdmin ? revenue : null, // hide from staff
+      orders, pending, customers, products,
+      recentOrders, lowStock,
       topProducts,
-      recentOrders,
-      todaySales,
-      monthSales,
-      lowStock
-    });
+      role: req.admin.role,
+    };
+
+    // Only super_admin sees financial summary
+    if (isSuperAdmin) {
+      const [[{ bill_count }]] = await db.query(
+        "SELECT COUNT(*) as bill_count FROM bills WHERE MONTH(created_at)=MONTH(NOW()) AND YEAR(created_at)=YEAR(NOW())"
+      );
+      response.bill_count = bill_count;
+    }
+
+    res.json(response);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
