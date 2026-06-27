@@ -10,13 +10,13 @@ function genInvoice() {
   return `BILL-${y}${m}${day}-${Math.floor(1000+Math.random()*9000)}`;
 }
 
-// POST /api/bills — create POS bill
-// Stock deducted immediately (no status flow needed for manual bills)
+// POST /api/bills — create POS bill (with advance payment deduction support)
 router.post('/', auth, async (req, res) => {
   const {
     customer_name, customer_phone, customer_phone2,
     customer_address, items, payment_method,
-    delivery_charge, discount, discount_type, notes
+    delivery_charge, discount, discount_type,
+    advance_paid, notes
   } = req.body;
 
   if (!customer_name?.trim()) return res.status(400).json({ error: 'Customer name is required' });
@@ -27,7 +27,7 @@ router.post('/', auth, async (req, res) => {
   try {
     await conn.beginTransaction();
 
-    // Upsert customer (store both phones)
+    // Upsert customer
     let customerId = null;
     const [ex] = await conn.query('SELECT id FROM customers WHERE phone = ?', [customer_phone.trim()]);
     if (ex.length) {
@@ -86,17 +86,22 @@ router.post('/', auth, async (req, res) => {
       }
     }
     const grandTotal = subtotal + deliveryFee - discountAmt;
+
+    // ── ADVANCE PAYMENT ──
+    const advanceAmt = Math.min(parseFloat(advance_paid || 0), grandTotal); // can't exceed total
+    const balanceDue = Math.max(0, grandTotal - advanceAmt);
+
     const invoice_no = genInvoice();
 
-    // Save bill
     const [billResult] = await conn.query(
       `INSERT INTO bills
         (invoice_no, customer_id, customer_name, customer_phone, customer_phone2, customer_address,
-         subtotal, delivery_charge, discount, discount_type, total, payment_method, notes, created_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         subtotal, delivery_charge, discount, discount_type, advance_paid, balance_due,
+         total, payment_method, notes, created_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [invoice_no, customerId, customer_name.trim(), customer_phone.trim(), customer_phone2||null,
-       customer_address||'', subtotal, deliveryFee, discountAmt,
-       discount_type||'fixed', grandTotal, payment_method, notes||null, req.admin?.id||null]
+       customer_address||'', subtotal, deliveryFee, discountAmt, discount_type||'fixed',
+       advanceAmt, balanceDue, grandTotal, payment_method, notes||null, req.admin?.id||null]
     );
     const billId = billResult.insertId;
 
@@ -110,15 +115,12 @@ router.post('/', auth, async (req, res) => {
          item.size, item.colour, item.quantity, item.unit_price, item.cost_price, item.total_price]
       );
 
-      // ── STOCK DEDUCTION ──
       if (item.variant_id) {
-        // Has specific variant — deduct from variant
         await conn.query(
           'UPDATE product_variants SET stock_qty = GREATEST(0, stock_qty - ?) WHERE id = ?',
           [item.quantity, item.variant_id]
         );
       } else {
-        // No variant — deduct from first available variant of this product
         await conn.query(
           `UPDATE product_variants
            SET stock_qty = GREATEST(0, stock_qty - ?)
@@ -131,7 +133,6 @@ router.post('/', auth, async (req, res) => {
 
     await conn.commit();
 
-    // Return full invoice for print
     res.status(201).json({
       invoice: {
         id: billId, invoice_no,
@@ -142,6 +143,8 @@ router.post('/', auth, async (req, res) => {
         items: enriched, subtotal, delivery_charge: deliveryFee,
         discount: discountAmt, discount_type: discount_type||'fixed',
         discount_input: discount,
+        advance_paid: advanceAmt,
+        balance_due: balanceDue,
         total: grandTotal, payment_method,
         notes: notes||null,
         created_at: new Date().toISOString(),
@@ -152,6 +155,23 @@ router.post('/', auth, async (req, res) => {
     await conn.rollback();
     res.status(500).json({ error: err.message });
   } finally { conn.release(); }
+});
+
+// PUT /api/bills/:id/settle — record additional payment toward balance due
+router.put('/:id/settle', auth, async (req, res) => {
+  const { amount } = req.body;
+  if (!amount || parseFloat(amount) <= 0) return res.status(400).json({ error: 'Enter a valid amount' });
+  try {
+    const [[bill]] = await db.query('SELECT * FROM bills WHERE id=?', [req.params.id]);
+    if (!bill) return res.status(404).json({ error: 'Bill not found' });
+
+    const payAmt = Math.min(parseFloat(amount), parseFloat(bill.balance_due));
+    const newAdvance = parseFloat(bill.advance_paid) + payAmt;
+    const newBalance = Math.max(0, parseFloat(bill.balance_due) - payAmt);
+
+    await db.query('UPDATE bills SET advance_paid=?, balance_due=? WHERE id=?', [newAdvance, newBalance, bill.id]);
+    res.json({ message: 'Payment recorded', advance_paid: newAdvance, balance_due: newBalance });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // GET /api/bills — list with date filter
@@ -174,6 +194,19 @@ router.get('/', auth, async (req, res) => {
   } catch(err) { res.status(500).json({ error: err.message }); }
 });
 
+// GET /api/bills/unpaid — bills with outstanding balance
+router.get('/unpaid', auth, async (req, res) => {
+  try {
+    const [bills] = await db.query(
+      `SELECT b.*, COUNT(bi.id) as item_count
+       FROM bills b LEFT JOIN bill_items bi ON b.id = bi.bill_id
+       WHERE b.balance_due > 0
+       GROUP BY b.id ORDER BY b.created_at DESC`
+    );
+    res.json(bills);
+  } catch(err) { res.status(500).json({ error: err.message }); }
+});
+
 // GET /api/bills/stats/summary — P&L for period
 router.get('/stats/summary', auth, async (req, res) => {
   try {
@@ -191,7 +224,8 @@ router.get('/stats/summary', auth, async (req, res) => {
     const [[counts]] = await db.query(
       `SELECT COUNT(*) as bill_count,
               COALESCE(SUM(b.discount),0) as total_discount,
-              COALESCE(SUM(b.delivery_charge),0) as total_delivery
+              COALESCE(SUM(b.delivery_charge),0) as total_delivery,
+              COALESCE(SUM(b.balance_due),0) as total_outstanding
        FROM bills b WHERE ${where}`, params
     );
     const [topProducts] = await db.query(
@@ -211,6 +245,7 @@ router.get('/stats/summary', auth, async (req, res) => {
       bill_count: counts.bill_count,
       total_discount: parseFloat(counts.total_discount),
       total_delivery: parseFloat(counts.total_delivery),
+      total_outstanding: parseFloat(counts.total_outstanding),
       top_products: topProducts,
     });
   } catch(err) { res.status(500).json({ error: err.message }); }
