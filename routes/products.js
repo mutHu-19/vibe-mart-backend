@@ -64,7 +64,7 @@ async function buildProductFields(body, isUpdate = false) {
   const {
     category_id, subcategory_id, name, description,
     price, compare_price, cost_price, sku, images,
-    is_active, is_featured, sort_order
+    is_active, is_featured, is_hot_deal, sort_order
   } = body;
 
   // Always-present columns
@@ -93,6 +93,10 @@ async function buildProductFields(body, isUpdate = false) {
     fields.push('is_featured');
     values.push(is_featured ? 1 : 0);
   }
+  if (cols.includes('is_hot_deal')) {
+    fields.push('is_hot_deal');
+    values.push(is_hot_deal ? 1 : 0);
+  }
   if (cols.includes('sort_order')) {
     fields.push('sort_order');
     values.push(sort_order || 0);
@@ -104,7 +108,7 @@ async function buildProductFields(body, isUpdate = false) {
 // ── GET /api/products — public listing ──
 router.get('/', async (req, res) => {
   try {
-    const { category, subcategory, search, featured, page = 1, limit = 20 } = req.query;
+    const { category, subcategory, search, featured, hot_deal, page = 1, limit = 20 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
     const cols = await getProductCols();
 
@@ -135,6 +139,9 @@ router.get('/', async (req, res) => {
     }
     if (featured === '1' && cols.includes('is_featured')) {
       where += ' AND p.is_featured = 1';
+    }
+    if (hot_deal === '1' && cols.includes('is_hot_deal')) {
+      where += ' AND p.is_hot_deal = 1';
     }
 
     const orderBy = cols.includes('sort_order')

@@ -22,6 +22,9 @@ app.use('/api/upload', require('./routes/upload'));
 app.use('/api/bills', require('./routes/bills'));
 app.use('/api/returns', require('./routes/returns'));
 app.use('/api/popup', require('./routes/popup'));
+app.use('/api/checkout-content', require('./routes/checkoutContent'));
+app.use('/api/site-settings', require('./routes/siteSettings'));
+app.use('/api/banner-slides', require('./routes/bannerSlides'));
 
 // Health check
 app.get('/api/health', (req, res) => {
