@@ -28,10 +28,10 @@ app.use('/api/banner-slides', require('./routes/bannerSlides'));
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'ShopLK API running' });
+  res.json({ status: 'ok', message: 'Zelinalk API running' });
 });
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`ShopLK API running on port ${PORT}`);
+  console.log(`ZelinalkLK API running on port ${PORT}`);
 });
